@@ -13,7 +13,7 @@
 # 詳細については、ライセンスを参照してください。
 
 """すべての指示のレジストリ。"""
-from instruction_following_eval import instructions
+import ja_instructions as instructions
 
 _KEYWORD = "keywords:"
 
@@ -73,6 +73,16 @@ INSTRUCTION_DICT = {
     + "english_lowercase": instructions.LowercaseLettersEnglishChecker,
     _PUNCTUATION + "no_comma": instructions.CommaChecker,
     _STARTEND + "quotation": instructions.QuotationChecker,
+    # 日本語特化指示
+    _PUNCTUATION + "no_touten": instructions.JapaneseNoToutenChecker,
+    _CHANGE_CASES + "japanese_hiragana": instructions.JapaneseHiraganaOnlyChecker,
+    _CHANGE_CASES + "japanese_katakana": instructions.JapaneseKatakanaOnlyChecker,
+    _CHANGE_CASES + "japanese_bracket_emphasis": instructions.JapaneseBracketEmphasisFrequencyChecker,
+    _KEYWORD + "japanese_star_frequency": instructions.JapaneseStarFrequencyChecker,
+    _KEYWORD + "japanese_letter_frequency": instructions.JapaneseLetterFrequencyChecker,
+    _CONTENT + "japanese_postscript": instructions.JapanesePostscriptChecker,
+    _STARTEND + "japanese_end_checker": instructions.JapaneseEndingPhraseChecker,
+    _LANGUAGE + "japanese_only": instructions.JapaneseOnlyLanguageChecker,
 }
 
 INSTRUCTION_CONFLICTS = {

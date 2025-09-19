@@ -20,7 +20,7 @@ import random
 import re
 from typing import List, Optional
 
-import immutabledict
+# import immutabledict
 import nltk
 
 # 日本語処理用
@@ -48,7 +48,7 @@ JAPANESE_WORD_LIST = [
 ]
 
 # ISO 639-1 コードから言語名への対応表
-LANGUAGE_CODES = immutabledict.immutabledict({
+LANGUAGE_CODES = {
     "en": "English",
     "es": "Spanish", 
     "pt": "Portuguese",
@@ -79,7 +79,7 @@ LANGUAGE_CODES = immutabledict.immutabledict({
     "pa": "Punjabi",
     "ml": "Malayalam",
     "fi": "Finnish",
-})
+}
 
 # 英語文分割用の正規表現パターン
 _ALPHABETS = "([A-Za-z])"

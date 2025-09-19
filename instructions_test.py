@@ -17,7 +17,7 @@
 
 from absl.testing import absltest
 from absl.testing import parameterized
-from instruction_following_eval import instructions
+import ja_instructions as instructions
 
 
 # pylint:disable=g-complex-comprehension

@@ -20,7 +20,7 @@ import json
 import re
 from typing import Dict, Optional, Sequence, Union
 
-from instruction_following_eval import instructions_registry
+import instructions_registry
 
 
 @dataclasses.dataclass

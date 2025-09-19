@@ -12,7 +12,7 @@
 # 明示的または黙示的を問わず、いかなる保証も条件もありません。
 # 詳細については、ライセンスを参照してください。
 
-"""日本語対応指示ライブラリ"""
+"""統合指示ライブラリ（日本語対応 + 英語版）"""
 import collections
 import json
 import random
@@ -20,7 +20,8 @@ import re
 import string
 from typing import Dict, Optional, Sequence, Union
 
-import logging
+from absl import logging
+import langdetect
 
 import jp_instructions_util as instructions_util
 
@@ -33,6 +34,10 @@ _LANGUAGES = instructions_util.LANGUAGE_CODES if hasattr(instructions_util, 'LAN
 # 比較のための関係演算（日本語対応）
 _COMPARISON_RELATION = ("未満", "以上")
 _COMPARISON_RELATION_EN = ("less than", "at least")
+
+# 英語版定数（instructions.pyより）
+_COMPARISON_RELATION_ORIGINAL = ("less than", "at least")
+_COMPARISON_RELATION_JA = ("未満", "以上")
 
 # 文の最大数
 _MAX_NUM_SENTENCES = 20
@@ -47,6 +52,10 @@ _NUM_BULLETS = 5
 _CONSTRAINED_RESPONSE_OPTIONS = (
     "私の答えははいです。", "私の答えはいいえです。", "私の答えはたぶんです。")
 
+# 制約付き応答のオプション（英語）
+_CONSTRAINED_RESPONSE_OPTIONS_EN = (
+    "My answer is yes.", "My answer is no.", "My answer is maybe.")
+
 # 開始キーワードのオプション（日本語）
 _STARTER_OPTIONS = ("私が言うなら", "私の答えは", "私は信じます",
                     "私の意見では", "私は思います", "私は考えています", "私は感じます",
@@ -57,6 +66,17 @@ _STARTER_OPTIONS = ("私が言うなら", "私の答えは", "私は信じます
 # 終了キーワードのオプション（日本語）
 _ENDING_OPTIONS = ("他に質問はありますか？",
                    "他にお手伝いできることはありますか？")
+
+# 開始キーワードのオプション（英語）
+_STARTER_OPTIONS_EN = ("I would say", "My answer is", "I believe",
+                       "In my opinion", "I think", "I reckon", "I feel",
+                       "From my perspective", "As I see it", "According to me",
+                       "As far as I'm concerned", "To my understanding",
+                       "In my view", "My take on it is", "As per my perception")
+
+# 終了キーワードのオプション（英語）
+_ENDING_OPTIONS_EN = ("Any other questions?",
+                      "Is there anything else I can help with?")
 
 # ハイライトされたセクションの数
 _NUM_HIGHLIGHTED_SECTIONS = 4
@@ -72,6 +92,9 @@ _NUM_PARAGRAPHS = 5
 
 # 追記マーカー（日本語）
 _POSTSCRIPT_MARKER = ("追伸", "P.S.")
+
+# 追記マーカー（英語）
+_POSTSCRIPT_MARKER_EN = ("P.S.", "P.P.S")
 
 # キーワードの数
 _NUM_KEYWORDS = 2
@@ -1150,3 +1173,1057 @@ class CapitalWordFrequencyChecker(Instruction):
       return capital_words_count < self._frequency
     else:
       return capital_words_count >= self._frequency
+
+
+# 日本語特化の指示チェッククラス
+
+class JapaneseHiraganaOnlyChecker(Instruction):
+  """ひらがなのみを使用しているかチェックする指示クラス（英語の小文字制約に相当）"""
+
+  def build_description(self, **kwargs):
+    """指示の説明を構築"""
+    return "回答はすべてひらがなで書いてください。漢字とカタカナは一切使用できません。"
+
+  def get_instruction_args(self):
+    return {}
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """回答がひらがなのみを使用しているかチェック"""
+    # 空白、句読点、英数字以外の文字をチェック
+    # ひらがな文字の範囲
+    for char in value:
+      # 空白、改行、句読点、基本的な記号は許可
+      if char.isspace() or char in '。、！？（）「」『』［］｛｝【】〈〉《》〔〕・':
+        continue
+      # ひらがなの範囲をチェック
+      if '\u3040' <= char <= '\u309F':
+        continue
+      # ひらがな以外の文字が見つかったらFalse
+      return False
+    
+    # すべての文字がひらがなまたは許可された記号である
+    return True
+
+
+class JapaneseKatakanaOnlyChecker(Instruction):
+  """カタカナのみを使用しているかチェックする指示クラス（英語の大文字制約に相当）"""
+
+  def build_description(self, **kwargs):
+    """指示の説明を構築"""
+    return "回答はすべてカタカナで書いてください。ひらがなと漢字は一切使用できません。"
+
+  def get_instruction_args(self):
+    return {}
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """回答がカタカナのみを使用しているかチェック"""
+    # 空白、句読点、英数字以外の文字をチェック
+    # カタカナ文字の範囲
+    for char in value:
+      # 空白、改行、句読点、基本的な記号は許可
+      if char.isspace() or char in '。、！？（）「」『』［］｛｝【】〈〉《》〔〕・':
+        continue
+      # カタカナの範囲をチェック
+      if '\u30A0' <= char <= '\u30FF':
+        continue
+      # カタカナ以外の文字が見つかったらFalse
+      return False
+    
+    # すべての文字がカタカナまたは許可された記号である
+    return True
+
+
+class JapaneseBracketEmphasisFrequencyChecker(Instruction):
+  """【】強調表現の頻度制約クラス（英語の大文字単語頻度に相当）"""
+
+  def build_description(self, capital_relation="以上", capital_frequency=1, **kwargs):
+    """指示の説明を構築"""
+    self._capital_relation = capital_relation
+    self._capital_frequency = capital_frequency
+    
+    if capital_relation == "未満":
+      return f"【】で囲んだ強調表現を{capital_frequency}回未満使用してください。"
+    elif capital_relation == "以上":
+      return f"【】で囲んだ強調表現を{capital_frequency}回以上使用してください。"
+    elif capital_relation == "正確に":
+      return f"【】で囲んだ強調表現を正確に{capital_frequency}回使用してください。"
+    else:
+      return f"【】で囲んだ強調表現を{capital_frequency}回{capital_relation}使用してください。"
+
+  def get_instruction_args(self):
+    return {
+      "capital_relation": self._capital_relation,
+      "capital_frequency": self._capital_frequency
+    }
+
+  def get_instruction_args_keys(self):
+    return ["capital_relation", "capital_frequency"]
+
+  def check_following(self, value):
+    """【】強調表現の頻度をチェック"""
+    emphasis_pattern = re.compile(r'【[^】]*】')
+    matches = emphasis_pattern.findall(value)
+    count = len(matches)
+    
+    if self._capital_relation == "less than" or self._capital_relation == "未満":
+      return count < self._capital_frequency
+    elif self._capital_relation == "at least" or self._capital_relation == "以上":
+      return count >= self._capital_frequency
+    elif self._capital_relation == "exactly" or self._capital_relation == "正確に":
+      return count == self._capital_frequency
+    else:
+      return False
+
+
+class JapaneseNoToutenChecker(Instruction):
+  """読点（、）禁止制約クラス（英語のカンマ禁止に相当）"""
+
+  def build_description(self, **kwargs):
+    """指示の説明を構築"""
+    return "回答に読点（、）を使用しないでください。"
+
+  def get_instruction_args(self):
+    return {}
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """読点が含まれていないかチェック"""
+    return '、' not in value
+
+
+class JapaneseStarFrequencyChecker(Instruction):
+  """星印記号（★）の頻度制約クラス（英語のアスタリスクに相当）"""
+
+  def build_description(self, let_relation="以上", let_frequency=6, letter="★", **kwargs):
+    """指示の説明を構築"""
+    self._let_relation = let_relation
+    self._let_frequency = let_frequency
+    self._letter = letter
+    
+    if let_relation == "未満":
+      return f"'{letter}'記号を{let_frequency}回未満含めてください。"
+    elif let_relation == "以上":
+      return f"'{letter}'記号を{let_frequency}回以上含めてください。"
+    elif let_relation == "正確に":
+      return f"'{letter}'記号を正確に{let_frequency}回含めてください。"
+    else:
+      return f"'{letter}'記号を{let_frequency}回{let_relation}含めてください。"
+
+  def get_instruction_args(self):
+    return {
+      "let_relation": self._let_relation,
+      "let_frequency": self._let_frequency,
+      "letter": self._letter
+    }
+
+  def get_instruction_args_keys(self):
+    return ["let_relation", "let_frequency", "letter"]
+
+  def check_following(self, value):
+    """星印記号の頻度をチェック"""
+    count = value.count(self._letter)
+    
+    if self._let_relation == "less than" or self._let_relation == "未満":
+      return count < self._let_frequency
+    elif self._let_relation == "at least" or self._let_relation == "以上":
+      return count >= self._let_frequency
+    elif self._let_relation == "exactly" or self._let_relation == "正確に":
+      return count == self._let_frequency
+    else:
+      return False
+
+
+class JapanesePostscriptChecker(Instruction):
+  """日本語追記マーカークラス（英語のP.S.に相当）"""
+
+  def build_description(self, postscript_marker="追記", **kwargs):
+    """指示の説明を構築"""
+    self._postscript_marker = postscript_marker
+    return f"回答の最後に「{postscript_marker}」で始まる追記を含めてください。"
+
+  def get_instruction_args(self):
+    return {"postscript_marker": self._postscript_marker}
+
+  def get_instruction_args_keys(self):
+    return ["postscript_marker"]
+
+  def check_following(self, value):
+    """追記マーカーが含まれているかチェック"""
+    lines = value.strip().split('\n')
+    for line in reversed(lines):
+      line = line.strip()
+      if line:
+        return line.startswith(self._postscript_marker)
+    return False
+
+
+class JapaneseEndingPhraseChecker(Instruction):
+  """日本語終了フレーズクラス（英語のend_checkerに相当）"""
+
+  def build_description(self, end_phrase="", **kwargs):
+    """指示の説明を構築"""
+    self._end_phrase = end_phrase
+    return f"回答を「{end_phrase}」という正確なフレーズで終えてください。"
+
+  def get_instruction_args(self):
+    return {"end_phrase": self._end_phrase}
+
+  def get_instruction_args_keys(self):
+    return ["end_phrase"]
+
+  def check_following(self, value):
+    """指定されたフレーズで終わっているかチェック"""
+    return value.strip().endswith(self._end_phrase)
+
+
+class JapaneseOnlyLanguageChecker(Instruction):
+  """日本語のみ制約クラス"""
+
+  def build_description(self, language="ja", **kwargs):
+    """指示の説明を構築"""
+    self._language = language
+    if language == "ja":
+      return "日本語のみを使用して回答してください。他の言語は使用できません。"
+    else:
+      lang_name = _LANGUAGES.get(language, language)
+      return f"{lang_name}のみを使用して回答してください。他の言語は使用できません。"
+
+  def get_instruction_args(self):
+    return {"language": self._language}
+
+  def get_instruction_args_keys(self):
+    return ["language"]
+
+  def check_following(self, value):
+    """日本語のみで構成されているかチェック"""
+    if self._language == "ja":
+      # 日本語文字（ひらがな、カタカナ、漢字）
+      japanese_chars = re.compile(r'[\u3040-\u309F\u30A0-\u30FF\u4E00-\u9FAF]')
+      
+      # 基本的な記号、数字、スペースは許可
+      allowed_chars = re.compile(r'[0-9\s\n.,!?()「」『』【】\u3000-\u303F\uFF00-\uFFEF#★]')
+      
+      # 英語のアルファベットをチェック
+      english_chars = re.compile(r'[a-zA-Z]')
+      
+      # 英語が含まれている場合はNG（ただし基本的な記号は除く）
+      if english_chars.search(value):
+        return False
+      
+      # 少なくとも一つは日本語文字が含まれている必要がある
+      return japanese_chars.search(value) is not None
+    else:
+      # 他の言語の場合は既存のロジックを使用
+      detected_language = instructions_util._detect_language(value)
+      return detected_language == self._language
+
+
+class JapaneseLetterFrequencyChecker(Instruction):
+  """日本語文字頻度制約クラス（日本語の特定文字に対応）"""
+
+  def build_description(self, let_relation="以上", let_frequency=1, letter="あ", **kwargs):
+    """指示の説明を構築"""
+    self._let_relation = let_relation
+    self._let_frequency = let_frequency
+    self._letter = letter
+    
+    if let_relation == "未満":
+      return f"文字「{letter}」は{let_frequency}回未満で現れる必要があります。"
+    elif let_relation == "以上":
+      return f"文字「{letter}」を{let_frequency}回以上含めてください。"
+    elif let_relation == "正確に":
+      return f"文字「{letter}」を正確に{let_frequency}回含めてください。"
+    else:
+      return f"文字「{letter}」を{let_frequency}回{let_relation}含めてください。"
+
+  def get_instruction_args(self):
+    return {
+      "let_relation": self._let_relation,
+      "let_frequency": self._let_frequency,
+      "letter": self._letter
+    }
+
+  def get_instruction_args_keys(self):
+    return ["let_relation", "let_frequency", "letter"]
+
+  def check_following(self, value):
+    """指定された文字の頻度をチェック"""
+    count = value.count(self._letter)
+    
+    if self._let_relation == "less than" or self._let_relation == "未満":
+      return count < self._let_frequency
+    elif self._let_relation == "at least" or self._let_relation == "以上":
+      return count >= self._let_frequency
+    elif self._let_relation == "exactly" or self._let_relation == "正確に":
+      return count == self._let_frequency
+    else:
+      return False
+
+
+# 不足していた指示クラスを追加
+
+class NumberOfParagraphs(Instruction):
+  """段落の数をチェックします"""
+
+  def build_description(self, *, num_paragraphs = None):
+    """指示の説明を構築します"""
+    self._num_paragraphs = num_paragraphs
+    if self._num_paragraphs is None or self._num_paragraphs < 0:
+      self._num_paragraphs = random.randint(1, _NUM_PARAGRAPHS)
+    
+    self._description_pattern = (
+        "回答は正確に{num_paragraphs}段落を含む必要があります。")
+    return self._description_pattern.format(num_paragraphs=self._num_paragraphs)
+
+  def get_instruction_args(self):
+    return {"num_paragraphs": self._num_paragraphs}
+
+  def get_instruction_args_keys(self):
+    return ["num_paragraphs"]
+
+  def check_following(self, value):
+    """段落の数が指示に従っているかをチェックします"""
+    paragraphs = [p.strip() for p in value.split('\n\n') if p.strip()]
+    # マークダウン区切り文字***でも分割
+    if '***' in value:
+      paragraphs = [p.strip() for p in value.split('***') if p.strip()]
+    return len(paragraphs) == self._num_paragraphs
+
+
+class KeywordFrequencyChecker(Instruction):
+  """特定のキーワードの頻度をチェックします"""
+
+  def build_description(self, *, keyword = None, frequency = None, relation = None):
+    """指示の説明を構築します"""
+    self._keyword = keyword or "キーワード"
+    self._frequency = frequency or _KEYWORD_FREQUENCY
+    self._relation = relation or "以上"
+
+    if self._relation == "未満":
+      self._description_pattern = (
+          "「{keyword}」という単語を{frequency}回未満で使用してください。")
+    elif self._relation == "以上":
+      self._description_pattern = (
+          "「{keyword}」という単語を少なくとも{frequency}回使用してください。")
+    elif self._relation == "正確に":
+      self._description_pattern = (
+          "「{keyword}」という単語を正確に{frequency}回使用してください。")
+    else:
+      self._description_pattern = (
+          "「{keyword}」という単語を{frequency}回{relation}使用してください。")
+
+    return self._description_pattern.format(
+        keyword=self._keyword, frequency=self._frequency)
+
+  def get_instruction_args(self):
+    return {"keyword": self._keyword, "frequency": self._frequency, 
+            "relation": self._relation}
+
+  def get_instruction_args_keys(self):
+    return ["keyword", "frequency", "relation"]
+
+  def check_following(self, value):
+    """キーワードの頻度が指示に従っているかをチェックします"""
+    count = value.count(self._keyword)
+    
+    if self._relation in ["未満", "less than"]:
+      return count < self._frequency
+    elif self._relation in ["以上", "at least"]:
+      return count >= self._frequency
+    elif self._relation in ["正確に", "exactly"]:
+      return count == self._frequency
+    else:
+      return False
+
+
+class LetterFrequencyChecker(Instruction):
+  """特定の文字の頻度をチェックします"""
+
+  def build_description(self, *, letter = None, let_frequency = None, let_relation = None):
+    """指示の説明を構築します"""
+    self._letter = letter or "あ"
+    self._let_frequency = let_frequency or _LETTER_FREQUENCY
+    self._let_relation = let_relation or "以上"
+
+    if self._let_relation == "未満":
+      return f"文字「{self._letter}」は{self._let_frequency}回未満で現れる必要があります。"
+    elif self._let_relation == "以上":
+      return f"文字「{self._letter}」を{self._let_frequency}回以上含めてください。"
+    elif self._let_relation == "正確に":
+      return f"文字「{self._letter}」を正確に{self._let_frequency}回含めてください。"
+    else:
+      return f"文字「{self._letter}」を{self._let_frequency}回{self._let_relation}含めてください。"
+
+  def get_instruction_args(self):
+    return {"letter": self._letter, "let_frequency": self._let_frequency, 
+            "let_relation": self._let_relation}
+
+  def get_instruction_args_keys(self):
+    return ["letter", "let_frequency", "let_relation"]
+
+  def check_following(self, value):
+    """文字の頻度が指示に従っているかをチェックします"""
+    count = value.count(self._letter)
+    
+    if self._let_relation in ["未満", "less than"]:
+      return count < self._let_frequency
+    elif self._let_relation in ["以上", "at least"]:
+      return count >= self._let_frequency
+    elif self._let_relation in ["正確に", "exactly"]:
+      return count == self._let_frequency
+    else:
+      return False
+
+
+class RepeatPromptChecker(Instruction):
+  """プロンプトの繰り返しをチェックします"""
+
+  def build_description(self, *, prompt_to_repeat = None):
+    """指示の説明を構築します"""
+    self._prompt_to_repeat = prompt_to_repeat or ""
+    
+    self._description_pattern = (
+        "最初にリクエストを一字一句変更せずに繰り返し、その後に回答してください。")
+    return self._description_pattern
+
+  def get_instruction_args(self):
+    return {"prompt_to_repeat": self._prompt_to_repeat}
+
+  def get_instruction_args_keys(self):
+    return ["prompt_to_repeat"]
+
+  def check_following(self, value):
+    """プロンプトが繰り返されているかをチェックします"""
+    if not self._prompt_to_repeat:
+      return True
+    
+    # 改行で分割して最初の部分をチェック
+    lines = value.strip().split('\n')
+    if not lines:
+      return False
+    
+    first_part = lines[0].strip()
+    return first_part == self._prompt_to_repeat.strip()
+
+
+class TwoResponsesChecker(Instruction):
+  """2つの異なる回答をチェックします"""
+
+  def build_description(self):
+    """指示の説明を構築します"""
+    self._description_pattern = (
+        "正確に2つの異なる回答を提供してください。回答を6つの星印記号で区切ってください：★★★★★★。")
+    return self._description_pattern
+
+  def get_instruction_args(self):
+    return None
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """2つの回答が星印で区切られているかをチェックします"""
+    # 6つの星印記号で分割
+    separator = "★★★★★★"
+    parts = value.split(separator)
+    
+    # 正確に2つの部分に分かれているかチェック
+    if len(parts) != 2:
+      return False
+    
+    # 両方の部分が空でないかチェック
+    for part in parts:
+      if not part.strip():
+        return False
+    
+    return True
+
+
+# 一般的な構造・形式制約クラス（日本語対応）
+
+class QuotationChecker(Instruction):
+  """応答が二重引用符で囲まれているかをチェックします"""
+
+  def build_description(self):
+    """指示の説明を構築します"""
+    self._description_pattern = (
+        "回答全体を二重引用符で囲んでください。"
+    )
+    return self._description_pattern
+
+  def get_instruction_args(self):
+    return None
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """応答が二重引用符で囲まれているかをチェックします"""
+    value = value.strip()
+    return len(value) > 1 and value[0] == '"' and value[-1] == '"'
+
+
+class HighlightSectionChecker(Instruction):
+  """ハイライトされたセクションをチェックします"""
+
+  def build_description(self, *, num_highlights=None):
+    """指示の説明を構築します
+    
+    Args:
+      num_highlights: ハイライトされたセクションの最小数を指定する整数
+      
+    Returns:
+      指示の説明を表す文字列
+    """
+    self._num_highlights = num_highlights
+    if self._num_highlights is None or self._num_highlights < 0:
+      self._num_highlights = random.randint(1, _NUM_HIGHLIGHTED_SECTIONS)
+
+    self._description_pattern = (
+        "マークダウンで少なくとも{num_highlights}つのセクションをハイライトしてください。例：*ハイライトされたセクション*。")
+
+    return self._description_pattern.format(num_highlights=self._num_highlights)
+
+  def get_instruction_args(self):
+    return {"num_highlights": self._num_highlights}
+
+  def get_instruction_args_keys(self):
+    return ["num_highlights"]
+
+  def check_following(self, value):
+    """ハイライトされたセクションの数が要件を満たしているかをチェックします
+    
+    Args:
+      value: 応答を表す文字列。応答には*highlighted*の形式で
+        ハイライトされたセクションが含まれていることが期待されます
+        
+    Returns:
+      *ハイライトされたセクション*の形式での実際のハイライトされた
+      セクションの数が最小要件を満たしている場合はTrue、そうでない場合はFalse
+    """
+    num_highlights = 0
+    highlights = re.findall(r"\*[^\n\*]*\*", value)
+    double_highlights = re.findall(r"\*\*[^\n\*]*\*\*", value)
+    for highlight in highlights:
+      if highlight.strip("*").strip():
+        num_highlights += 1
+    for highlight in double_highlights:
+      if highlight.removeprefix("**").removesuffix("**").strip():
+        num_highlights += 1
+
+    return num_highlights >= self._num_highlights
+
+
+class TitleChecker(Instruction):
+  """応答にタイトルがあるかをチェックします"""
+
+  def build_description(self):
+    """指示の説明を構築します"""
+    self._description_pattern = (
+        "回答には二重角括弧で囲まれたタイトルを含める必要があります。例：<<タイトル>>。"
+    )
+    return self._description_pattern
+
+  def get_instruction_args(self):
+    return None
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """応答にタイトルが含まれているかをチェックします"""
+    pattern = r"<<[^\n]+>>"
+    re_pattern = re.compile(pattern)
+    titles = re.findall(re_pattern, value)
+
+    for title in titles:
+      if title.lstrip("<").rstrip(">").strip():
+        return True
+    return False
+
+# 日本語制約の便利関数とマッピング
+
+def check_japanese_constraint(response: str, constraint_type: str, **kwargs) -> bool:
+  """日本語制約の統一チェック関数"""
+  
+  if constraint_type == "hiragana_only":
+    checker = JapaneseHiraganaOnlyChecker("temp")
+    return checker.check_following(response)
+  
+  elif constraint_type == "katakana_only":
+    checker = JapaneseKatakanaOnlyChecker("temp")
+    return checker.check_following(response)
+  
+  elif constraint_type == "bracket_emphasis_frequency":
+    relation = kwargs.get('relation', 'at least')
+    frequency = kwargs.get('frequency', 1)
+    checker = JapaneseBracketEmphasisFrequencyChecker("temp")
+    checker.build_description(capital_relation=relation, capital_frequency=frequency)
+    return checker.check_following(response)
+  
+  elif constraint_type == "no_touten":
+    checker = JapaneseNoToutenChecker("temp")
+    return checker.check_following(response)
+  
+  elif constraint_type == "star_frequency":
+    relation = kwargs.get('relation', 'at least')
+    frequency = kwargs.get('frequency', 6)
+    letter = kwargs.get('letter', '★')
+    checker = JapaneseStarFrequencyChecker("temp")
+    checker.build_description(let_relation=relation, let_frequency=frequency, letter=letter)
+    return checker.check_following(response)
+  
+  elif constraint_type == "japanese_postscript":
+    marker = kwargs.get('marker', '追記')
+    checker = JapanesePostscriptChecker("temp")
+    checker.build_description(postscript_marker=marker)
+    return checker.check_following(response)
+  
+  elif constraint_type == "japanese_ending":
+    phrase = kwargs.get('phrase', '')
+    checker = JapaneseEndingPhraseChecker("temp")
+    checker.build_description(end_phrase=phrase)
+    return checker.check_following(response)
+  
+  elif constraint_type == "japanese_only":
+    language = kwargs.get('language', 'ja')
+    checker = JapaneseOnlyLanguageChecker("temp")
+    checker.build_description(language=language)
+    return checker.check_following(response)
+  
+  elif constraint_type == "japanese_letter_frequency":
+    relation = kwargs.get('relation', 'at least')
+    frequency = kwargs.get('frequency', 1)
+    letter = kwargs.get('letter', 'あ')
+    checker = JapaneseLetterFrequencyChecker("temp")
+    checker.build_description(let_relation=relation, let_frequency=frequency, letter=letter)
+    return checker.check_following(response)
+  
+  else:
+    return False
+
+
+# 日本語対応指示クラスのマッピング
+JAPANESE_INSTRUCTION_MAPPING = {
+    "change_case:japanese_hiragana": JapaneseHiraganaOnlyChecker,
+    "change_case:japanese_katakana": JapaneseKatakanaOnlyChecker,
+    "change_case:japanese_bracket_emphasis": JapaneseBracketEmphasisFrequencyChecker,
+    "punctuation:no_touten": JapaneseNoToutenChecker,
+    "keywords:japanese_star_frequency": JapaneseStarFrequencyChecker,
+    "keywords:japanese_letter_frequency": JapaneseLetterFrequencyChecker,
+    "detectable_content:japanese_postscript": JapanesePostscriptChecker,
+    "startend:japanese_end_checker": JapaneseEndingPhraseChecker,
+    "language:japanese_only": JapaneseOnlyLanguageChecker,
+}
+
+
+def get_japanese_instruction(instruction_id: str, instruction_name: str):
+  """日本語対応指示クラスを取得"""
+  if instruction_name in JAPANESE_INSTRUCTION_MAPPING:
+    return JAPANESE_INSTRUCTION_MAPPING[instruction_name](instruction_id)
+  else:
+    raise ValueError(f"未対応の日本語指示: {instruction_name}")
+
+
+def convert_english_to_japanese_instruction(instruction_id_list, kwargs_list):
+  """英語の指示IDを日本語対応に変換"""
+  japanese_instruction_ids = []
+  japanese_kwargs = []
+  
+  for i, instruction_id in enumerate(instruction_id_list):
+    kwargs = kwargs_list[i] if i < len(kwargs_list) else {}
+    
+    # 英語の制約を日本語制約に変換
+    if instruction_id == "change_case:english_lowercase":
+      japanese_instruction_ids.append("change_case:japanese_hiragana")
+      japanese_kwargs.append({})
+      
+    elif instruction_id == "change_case:english_capital":
+      japanese_instruction_ids.append("change_case:japanese_katakana")
+      japanese_kwargs.append({})
+      
+    elif instruction_id == "change_case:capital_word_frequency":
+      japanese_instruction_ids.append("change_case:japanese_bracket_emphasis")
+      japanese_kwargs.append(kwargs)
+      
+    elif instruction_id == "punctuation:no_comma":
+      japanese_instruction_ids.append("punctuation:no_touten")
+      japanese_kwargs.append({})
+      
+    elif instruction_id == "keywords:letter_frequency" and kwargs.get("letter") == "#":
+      # ハッシュタグの場合はそのまま
+      japanese_instruction_ids.append(instruction_id)
+      japanese_kwargs.append(kwargs)
+      
+    elif instruction_id == "keywords:letter_frequency":
+      # 他の文字の場合は日本語文字にマッピング
+      letter_mapping = {"o": "あ", "t": "と", "\!": "！", "*": "★"}
+      original_letter = kwargs.get("letter", "")
+      if original_letter in letter_mapping:
+        new_kwargs = kwargs.copy()
+        new_kwargs["letter"] = letter_mapping[original_letter]
+        japanese_instruction_ids.append("keywords:japanese_letter_frequency")
+        japanese_kwargs.append(new_kwargs)
+      else:
+        japanese_instruction_ids.append(instruction_id)
+        japanese_kwargs.append(kwargs)
+        
+    elif instruction_id == "detectable_content:postscript":
+      japanese_instruction_ids.append("detectable_content:japanese_postscript")
+      # P.S.やP.P.Sを追記に変換
+      new_kwargs = kwargs.copy()
+      marker = kwargs.get("postscript_marker", "P.S.")
+      if marker in ["P.S.", "P.P.S"]:
+        new_kwargs["postscript_marker"] = "追記"
+      japanese_kwargs.append(new_kwargs)
+      
+    elif instruction_id == "startend:end_checker":
+      japanese_instruction_ids.append("startend:japanese_end_checker")
+      japanese_kwargs.append(kwargs)
+      
+    elif instruction_id == "language:response_language":
+      if kwargs.get("language") == "ja":
+        japanese_instruction_ids.append("language:japanese_only")
+        japanese_kwargs.append(kwargs)
+      else:
+        # 他の言語の場合はそのまま
+        japanese_instruction_ids.append(instruction_id)
+        japanese_kwargs.append(kwargs)
+        
+    else:
+      # その他の制約はそのまま
+      japanese_instruction_ids.append(instruction_id)
+      japanese_kwargs.append(kwargs)
+  
+  return japanese_instruction_ids, japanese_kwargs
+
+
+# 日本語文字種チェック用ヘルパー関数
+def is_hiragana_char(char: str) -> bool:
+  """文字がひらがなかどうかをチェック"""
+  return '\u3040' <= char <= '\u309F'
+
+
+def is_katakana_char(char: str) -> bool:
+  """文字がカタカナかどうかをチェック"""
+  return '\u30A0' <= char <= '\u30FF'
+
+
+def is_kanji_char(char: str) -> bool:
+  """文字が漢字かどうかをチェック"""
+  return '\u4E00' <= char <= '\u9FAF'
+
+
+def is_japanese_char(char: str) -> bool:
+  """文字が日本語（ひらがな、カタカナ、漢字）かどうかをチェック"""
+  return is_hiragana_char(char) or is_katakana_char(char) or is_kanji_char(char)
+
+
+def count_japanese_chars(text: str) -> dict:
+  """日本語文字の種類別カウント"""
+  counts = {
+    'hiragana': 0,
+    'katakana': 0,
+    'kanji': 0,
+    'total_japanese': 0
+  }
+  
+  for char in text:
+    if is_hiragana_char(char):
+      counts['hiragana'] += 1
+      counts['total_japanese'] += 1
+    elif is_katakana_char(char):
+      counts['katakana'] += 1
+      counts['total_japanese'] += 1
+    elif is_kanji_char(char):
+      counts['kanji'] += 1
+      counts['total_japanese'] += 1
+  
+  return counts
+
+
+# テスト用関数
+def test_japanese_constraints():
+  """日本語制約チェック関数のテスト"""
+  print("=== 日本語制約チェック関数テスト ===")
+  
+  # ひらがなのみテスト
+  print("1. ひらがなのみチェック:")
+  hiragana_text = "これはひらがなだけのぶんしょうです。"
+  mixed_text = "これはひらがなとカタカナの文章です。"
+  print(f"  '{hiragana_text}': {check_japanese_constraint(hiragana_text, 'hiragana_only')}")
+  print(f"  '{mixed_text}': {check_japanese_constraint(mixed_text, 'hiragana_only')}")
+  
+  # カタカナのみテスト
+  print("2. カタカナのみチェック:")
+  katakana_text = "コレハカタカナダケノブンショウデス。"
+  print(f"  '{katakana_text}': {check_japanese_constraint(katakana_text, 'katakana_only')}")
+  print(f"  '{mixed_text}': {check_japanese_constraint(mixed_text, 'katakana_only')}")
+  
+  # 強調表現テスト
+  print("3. 【】強調表現チェック:")
+  emphasis_text = "これは【重要】な【ポイント】です【確認】してください。"
+  print(f"  '{emphasis_text}': {check_japanese_constraint(emphasis_text, 'bracket_emphasis_frequency', relation='以上', frequency=3)}")
+  
+  # 読点チェック
+  print("4. 読点なしチェック:")
+  no_touten_text = "これは読点のない文章です。"
+  with_touten_text = "これは、読点のある文章です。"
+  print(f"  '{no_touten_text}': {check_japanese_constraint(no_touten_text, 'no_touten')}")
+  print(f"  '{with_touten_text}': {check_japanese_constraint(with_touten_text, 'no_touten')}")
+  
+  # 星印チェック
+  print("5. 星印頻度チェック:")
+  star_text = "これは★★★★★★で区切られた文章です。"
+  print(f"  '{star_text}': {check_japanese_constraint(star_text, 'star_frequency', relation='以上', frequency=6)}")
+  
+  # 追記チェック
+  print("6. 追記マーカーチェック:")
+  postscript_text = "本文です。\n追記 これは追記です。"
+  print(f"  '{postscript_text}': {check_japanese_constraint(postscript_text, 'japanese_postscript', marker='追記')}")
+  
+  # 終了フレーズチェック
+  print("7. 終了フレーズチェック:")
+  ending_text = "これは文章です。他にご不明な点はございますか？"
+  print(f"  '{ending_text}': {check_japanese_constraint(ending_text, 'japanese_ending', phrase='他にご不明な点はございますか？')}")
+  
+  # 日本語のみチェック
+  print("8. 日本語のみチェック:")
+  japanese_only_text = "これは日本語だけの文章です。"
+  mixed_lang_text = "これはJapanese and English混合の文章です。"
+  print(f"  '{japanese_only_text}': {check_japanese_constraint(japanese_only_text, 'japanese_only')}")
+  print(f"  '{mixed_lang_text}': {check_japanese_constraint(mixed_lang_text, 'japanese_only')}")
+
+
+def test_japanese_instructions():
+  """日本語指示クラスのテスト"""
+  print("=== 日本語指示クラステスト ===")
+  
+  # ひらがなのみ
+  hiragana_inst = JapaneseHiraganaOnlyChecker("test_hiragana")
+  print(f"1. ひらがなのみ指示: {hiragana_inst.build_description()}")
+  print(f"   チェック結果: {hiragana_inst.check_following('これはひらがなです')}")
+  
+  # カタカナのみ
+  katakana_inst = JapaneseKatakanaOnlyChecker("test_katakana")
+  print(f"2. カタカナのみ指示: {katakana_inst.build_description()}")
+  print(f"   チェック結果: {katakana_inst.check_following('コレハカタカナデス')}")
+  
+  # 強調表現
+  emphasis_inst = JapaneseBracketEmphasisFrequencyChecker("test_emphasis")
+  print(f"3. 強調表現指示: {emphasis_inst.build_description(capital_frequency=2)}")
+  emphasis_inst.build_description(capital_frequency=2)
+  print(f"   チェック結果: {emphasis_inst.check_following('これは【重要】な【ポイント】です')}")
+  
+  # 読点禁止
+  touten_inst = JapaneseNoToutenChecker("test_touten")
+  print(f"4. 読点禁止指示: {touten_inst.build_description()}")
+  print(f"   チェック結果: {touten_inst.check_following('これは読点なしです')}")
+  
+  # 変換テスト
+  print("5. 英語→日本語指示変換テスト:")
+  english_ids = ["change_case:english_lowercase", "punctuation:no_comma"]
+  english_kwargs = [{}, {}]
+  japanese_ids, japanese_kwargs = convert_english_to_japanese_instruction(english_ids, english_kwargs)
+  print(f"   英語: {english_ids}")
+  print(f"   日本語: {japanese_ids}")
+
+
+# 英語版指示クラス（instructions.pyより統合）
+
+class ResponseLanguageCheckerEN(Instruction):
+  """応答全体の言語をチェックします（英語版）"""
+
+  def build_description(self, *, language = None):
+    """指示の説明を構築します"""
+    self._language = language
+    if self._language is None:
+      available_languages = list(_LANGUAGES.keys()) if hasattr(instructions_util, 'LANGUAGE_CODES') else ['en', 'ja', 'fr', 'de', 'es']
+      self._language = random.choice(available_languages)
+    
+    self._description_pattern = (
+        "Your ENTIRE response should be in {language} language, no other " +
+        "language is allowed.")
+    return self._description_pattern.format(language=_LANGUAGES.get(self._language, self._language))
+
+  def get_instruction_args(self):
+    return {"language": self._language}
+
+  def get_instruction_args_keys(self):
+    return ["language"]
+
+  def check_following(self, value):
+    """応答全体の言語が指示に従っているかをチェックします"""
+    assert isinstance(value, str)
+
+    try:
+      return langdetect.detect(value) == self._language
+    except langdetect.LangDetectException as e:
+      logging.error(
+          "Unable to detect language for text %s due to %s", value, e
+      )
+      return True
+
+
+class NumberOfSentencesEN(Instruction):
+  """文の数をチェックします（英語版）"""
+
+  def build_description(self, *, num_sentences = None, relation = None):
+    """指示の説明を構築します"""
+    self._num_sentences_threshold = num_sentences
+    if (self._num_sentences_threshold is None or
+        self._num_sentences_threshold < 0):
+      self._num_sentences_threshold = random.randint(1, _MAX_NUM_SENTENCES)
+
+    if relation is None:
+      self._comparison_relation = random.choice(_COMPARISON_RELATION_ORIGINAL)
+    elif relation not in _COMPARISON_RELATION_ORIGINAL + _COMPARISON_RELATION_JA:
+      raise ValueError("The supported relation for comparison must be in "
+                       f"{_COMPARISON_RELATION_ORIGINAL + _COMPARISON_RELATION_JA}, but {relation} is given.")
+    else:
+      self._comparison_relation = relation
+
+    self._description_pattern = (
+        "Your response should contain {relation} {num_sentences} sentences.")
+    return self._description_pattern.format(
+        relation=self._comparison_relation,
+        num_sentences=self._num_sentences_threshold)
+
+  def get_instruction_args(self):
+    return {"num_sentences": self._num_sentences_threshold,
+            "relation": self._comparison_relation}
+
+  def get_instruction_args_keys(self):
+    return ["num_sentences", "relation"]
+
+  def check_following(self, value):
+    """文の数が指示に従っているかをチェックします"""
+    num_sentences = instructions_util.count_sentences(value)
+    if self._comparison_relation == _COMPARISON_RELATION_ORIGINAL[0]:
+      return num_sentences < self._num_sentences_threshold
+    elif self._comparison_relation == _COMPARISON_RELATION_ORIGINAL[1]:
+      return num_sentences >= self._num_sentences_threshold
+
+
+class PlaceholderCheckerEN(Instruction):
+  """テンプレート作成におけるプレースホルダーをチェックします（英語版）"""
+
+  def build_description(self, *, num_placeholders = None):
+    """指示の説明を構築します"""
+    self._num_placeholders = num_placeholders
+    if self._num_placeholders is None or self._num_placeholders < 0:
+      self._num_placeholders = random.randint(1, _NUM_PLACEHOLDERS)
+    self._description_pattern = (
+        "The response must contain at least {num_placeholders} placeholders " +
+        "represented by square brackets, such as [address].")
+    return self._description_pattern.format(
+        num_placeholders=self._num_placeholders)
+
+  def get_instruction_args(self):
+    return {"num_placeholders": self._num_placeholders}
+
+  def get_instruction_args_keys(self):
+    return ["num_placeholders"]
+
+  def check_following(self, value):
+    """プレースホルダーの数が指示に従っているかをチェックします"""
+    placeholders = re.findall(r"\[.*?\]", value)
+    num_placeholders = len(placeholders)
+    return num_placeholders >= self._num_placeholders
+
+
+class BulletListCheckerEN(Instruction):
+  """プロンプト内の箇条書きリストをチェックします（英語版）"""
+
+  def build_description(self, *, num_bullets = None):
+    """指示の説明を構築します"""
+    self._num_bullets = num_bullets
+    if self._num_bullets is None or self._num_bullets < 0:
+      self._num_bullets = random.randint(1, _NUM_BULLETS)
+    self._description_pattern = (
+        "Your answer must contain exactly {num_bullets} bullet points. " +
+        "Use the markdown bullet points such as:\n" +
+        "* This is point 1. \n" +
+        "* This is point 2")
+    return self._description_pattern.format(
+        num_bullets=self._num_bullets)
+
+  def get_instruction_args(self):
+    return {"num_bullets": self._num_bullets}
+
+  def get_instruction_args_keys(self):
+    return ["num_bullets"]
+
+  def check_following(self, value):
+    """箇条書きリストの数が要件を満たしているかをチェックします"""
+    bullet_lists = re.findall(r"^\s*\*[^\*].*$", value, flags=re.MULTILINE)
+    bullet_lists_2 = re.findall(r"^\s*-.*$", value, flags=re.MULTILINE)
+    num_bullet_lists = len(bullet_lists) + len(bullet_lists_2)
+    return num_bullet_lists == self._num_bullets
+
+
+class ConstrainedResponseCheckerEN(Instruction):
+  """制約付き応答をチェックします（英語版）"""
+
+  def build_description(self):
+    """指示の説明を構築します"""
+    self._constrained_responses = _CONSTRAINED_RESPONSE_OPTIONS_EN
+    self._description_pattern = (
+        "Answer with one of the following options: {response_options}")
+    return self._description_pattern.format(
+        response_options=self._constrained_responses)
+
+  def get_instruction_args(self):
+    return None
+
+  def get_instruction_args_keys(self):
+    return []
+
+  def check_following(self, value):
+    """応答が制約されたオプションと一致するかをチェックします"""
+    value = value.strip()
+    for constrained_response in self._constrained_responses:
+      if constrained_response in value:
+        return True
+    return False
+
+
+class ConstrainedStartCheckerEN(Instruction):
+  """応答の開始をチェックします（英語版）"""
+
+  def build_description(self, *, starter = None):
+    """指示の説明を構築します"""
+    self._starter = starter.strip() if isinstance(starter, str) else starter
+    if self._starter is None:
+      self._starter = random.choice(_STARTER_OPTIONS_EN)
+    self._description_pattern = (
+        "During the conversation, when it is your turn, " +
+        "please always start with {starter}")
+    return self._description_pattern.format(starter=self._starter)
+
+  def get_instruction_args(self):
+    return {"starter": self._starter}
+
+  def get_instruction_args_keys(self):
+    return ["starter"]
+
+  def check_following(self, value):
+    """応答が制約されたキーワードまたはフレーズで始まるかをチェックします"""
+    response_pattern = r"^\s*" + self._starter + r".*$"
+    response_with_constrained_start = re.search(response_pattern, value,
+                                                flags=re.MULTILINE)
+    return True if response_with_constrained_start else False
+
+
+if __name__ == "__main__":
+  test_japanese_constraints()
+  print("\n")
+  test_japanese_instructions()
