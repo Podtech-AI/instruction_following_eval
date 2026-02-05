@@ -23,6 +23,8 @@ from absl import logging
 
 from instruction_following_eval import evaluation_lib
 
+import nltk
+nltk.download('punkt_tab')
 
 _INPUT_DATA = flags.DEFINE_string(
     "input_data", None, "入力データへのパス", required=True
@@ -53,23 +55,23 @@ def main(argv):
       (evaluation_lib.test_instruction_following_strict, "eval_results_strict"),
       (evaluation_lib.test_instruction_following_loose, "eval_results_loose"),
   ]:
-    logging.info("Generating %s...", output_file_name)
+    logging.info("%s を生成中...", output_file_name)
     outputs = []
     for inp in inputs:
       outputs.append(func(inp, prompt_to_response))
     follow_all_instructions = [o.follow_all_instructions for o in outputs]
     accuracy = sum(follow_all_instructions) / len(outputs)
-    logging.info("Accuracy: %f", accuracy)
+    logging.info("精度: %f", accuracy)
 
     output_file_name = os.path.join(
         _OUTPUT_DIR.value, output_file_name + ".jsonl"
     )
     evaluation_lib.write_outputs(output_file_name, outputs)
-    logging.info("Generated: %s", output_file_name)
+    logging.info("生成完了: %s", output_file_name)
 
     # 指示追従精度レポートを出力します。
     print("=" * 64)
-    print(f"{output_file_name} Accuracy Scores:")
+    print(f"{output_file_name} 精度スコア:")
     evaluation_lib.print_report(outputs)
 
 

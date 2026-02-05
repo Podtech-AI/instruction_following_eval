@@ -17,11 +17,9 @@
 import collections
 import dataclasses
 import json
-import re
 from typing import Dict, Optional, Sequence, Union
 
 from instruction_following_eval import instructions_registry
-
 
 @dataclasses.dataclass
 class InputExample:
@@ -77,7 +75,11 @@ def test_instruction_following_strict(
     prompt_to_response,
 ):
   """指示に従っているかどうかを確認するために応答をテストします。"""
-  response = prompt_to_response[inp.prompt]
+  if inp.prompt not in prompt_to_response:
+    # プロンプトに対応するレスポンスが見つからない場合、空のレスポンスで処理
+    response = ""
+  else:
+    response = prompt_to_response[inp.prompt]
   instruction_list = inp.instruction_id_list
   is_following_list = []
 
@@ -85,10 +87,37 @@ def test_instruction_following_strict(
     instruction_cls = instructions_registry.INSTRUCTION_DICT[instruction_id]
     instruction = instruction_cls(instruction_id)
 
-    instruction.build_description(**inp.kwargs[index])
-    args = instruction.get_instruction_args()
-    if args and "prompt" in args:
-      instruction.build_description(prompt=inp.prompt)
+    # 指示クラスが受け取るパラメータのみをフィルタリング
+    kwargs = inp.kwargs[index]
+    
+    # 指示クラスが受け取るパラメータのキーを取得
+    try:
+      args_keys = instruction.get_instruction_args_keys()
+      if args_keys:
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in args_keys}
+        # 必須パラメータが不足している場合はスキップ
+        if not filtered_kwargs and args_keys:
+          instruction.build_description()
+        else:
+          instruction.build_description(**filtered_kwargs)
+      else:
+        instruction.build_description()
+    except (AttributeError, ValueError):
+      # get_instruction_args_keysメソッドがない場合や必須パラメータが不足している場合は、デフォルトでbuild_descriptionを呼ぶ
+      try:
+        instruction.build_description()
+      except ValueError:
+        # 必須パラメータが不足している場合はスキップ
+        pass
+    
+    # promptパラメータが必要な場合は追加
+    try:
+      args = instruction.get_instruction_args()
+      if args and "prompt" in args:
+        instruction.build_description(prompt=inp.prompt)
+    except AttributeError:
+      # get_instruction_argsメソッドがない場合はスキップ
+      pass
 
     if response.strip() and instruction.check_following(response):
       is_following_list.append(True)
@@ -109,7 +138,11 @@ def test_instruction_following_loose(
     prompt_to_response,
 ):
   """指示に従うための上限について応答をテストします。"""
-  response = prompt_to_response[inp.prompt]
+  if inp.prompt not in prompt_to_response:
+    # プロンプトに対応するレスポンスが見つからない場合、空のレスポンスで処理
+    response = ""
+  else:
+    response = prompt_to_response[inp.prompt]
   r = response.split("\n")
   response_remove_first = "\n".join(r[1:]).strip()
   response_remove_last = "\n".join(r[:-1]).strip()
@@ -135,10 +168,37 @@ def test_instruction_following_loose(
     instruction_cls = instructions_registry.INSTRUCTION_DICT[instruction_id]
     instruction = instruction_cls(instruction_id)
 
-    instruction.build_description(**inp.kwargs[index])
-    args = instruction.get_instruction_args()
-    if args and "prompt" in args:
-      instruction.build_description(prompt=inp.prompt)
+    # 指示クラスが受け取るパラメータのみをフィルタリング
+    kwargs = inp.kwargs[index]
+    
+    # 指示クラスが受け取るパラメータのキーを取得
+    try:
+      args_keys = instruction.get_instruction_args_keys()
+      if args_keys:
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k in args_keys}
+        # 必須パラメータが不足している場合はスキップ
+        if not filtered_kwargs and args_keys:
+          instruction.build_description()
+        else:
+          instruction.build_description(**filtered_kwargs)
+      else:
+        instruction.build_description()
+    except (AttributeError, ValueError):
+      # get_instruction_args_keysメソッドがない場合や必須パラメータが不足している場合は、デフォルトでbuild_descriptionを呼ぶ
+      try:
+        instruction.build_description()
+      except ValueError:
+        # 必須パラメータが不足している場合はスキップ
+        pass
+    
+    # promptパラメータが必要な場合は追加
+    try:
+      args = instruction.get_instruction_args()
+      if args and "prompt" in args:
+        instruction.build_description(prompt=inp.prompt)
+    except AttributeError:
+      # get_instruction_argsメソッドがない場合はスキップ
+      pass
 
     is_following = False
     for r in all_responses:
@@ -165,6 +225,124 @@ def read_prompt_to_response_dict(input_jsonl_filename):
       example = json.loads(l)
       return_dict[example["prompt"]] = example["response"]
   return return_dict
+
+
+def generate_gpt_response(prompt: str, model: str = "gpt-3.5-turbo", api_key: Optional[str] = None) -> str:
+  """GPTモデルを使用してプロンプトに対する応答を生成します。"""
+  if not OPENAI_AVAILABLE:
+    raise ImportError("OpenAIライブラリがインストールされていません。pip install openai を実行してください。")
+  
+  if api_key is None:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if api_key is None:
+      raise ValueError("OpenAI APIキーが設定されていません。環境変数OPENAI_API_KEYを設定するか、api_keyパラメータを指定してください。")
+  
+  client = openai.OpenAI(api_key=api_key)
+  
+  try:
+    response = client.chat.completions.create(
+      model=model,
+      messages=[
+        {"role": "user", "content": prompt}
+      ],
+      max_tokens=2000,
+      temperature=0.7
+    )
+    return response.choices[0].message.content
+  except Exception as e:
+    raise RuntimeError(f"GPT API呼び出し中にエラーが発生しました: {e}")
+
+
+def generate_claude_response(prompt: str, model: str = "claude-3-haiku-20240307", api_key: Optional[str] = None) -> str:
+  """Claude モデルを使用してプロンプトに対する応答を生成します。"""
+  if not ANTHROPIC_AVAILABLE:
+    raise ImportError("anthropicライブラリがインストールされていません。pip install anthropic を実行してください。")
+  
+  if api_key is None:
+    api_key = os.getenv("ANTHROPIC_API_KEY")
+    if api_key is None:
+      raise ValueError("Anthropic APIキーが設定されていません。環境変数ANTHROPIC_API_KEYを設定するか、api_keyパラメータを指定してください。")
+  
+  client = anthropic.Anthropic(api_key=api_key)
+  
+  try:
+    response = client.messages.create(
+      model=model,
+      max_tokens=2000,
+      messages=[
+        {"role": "user", "content": prompt}
+      ]
+    )
+    return response.content[0].text
+  except Exception as e:
+    raise RuntimeError(f"Claude API呼び出し中にエラーが発生しました: {e}")
+
+
+def generate_gemini_response(prompt: str, model: str = "gemini-pro", api_key: Optional[str] = None) -> str:
+  """Gemini モデルを使用してプロンプトに対する応答を生成します。"""
+  if not GOOGLE_AI_AVAILABLE:
+    raise ImportError("google-generativeaiライブラリがインストールされていません。pip install google-generativeai を実行してください。")
+  
+  if api_key is None:
+    api_key = os.getenv("GOOGLE_AI_API_KEY")
+    if api_key is None:
+      raise ValueError("Google AI APIキーが設定されていません。環境変数GOOGLE_AI_API_KEYを設定するか、api_keyパラメータを指定してください。")
+  
+  genai.configure(api_key=api_key)
+  
+  try:
+    model_instance = genai.GenerativeModel(model)
+    response = model_instance.generate_content(prompt)
+    return response.text
+  except Exception as e:
+    raise RuntimeError(f"Gemini API呼び出し中にエラーが発生しました: {e}")
+
+
+def generate_response(prompt: str, provider: str = "openai", model: str = None, api_key: Optional[str] = None) -> str:
+  """指定されたプロバイダーとモデルを使用してプロンプトに対する応答を生成します。"""
+  if provider == "openai":
+    model = model or "gpt-3.5-turbo"
+    return generate_gpt_response(prompt, model, api_key)
+  elif provider == "anthropic":
+    model = model or "claude-3-haiku-20240307"
+    return generate_claude_response(prompt, model, api_key)
+  elif provider == "google":
+    model = model or "gemini-pro"
+    return generate_gemini_response(prompt, model, api_key)
+  else:
+    raise ValueError(f"サポートされていないプロバイダーです: {provider}. サポートされているプロバイダー: openai, anthropic, google")
+
+
+def generate_responses_with_gpt(inputs: Sequence[InputExample], model: str = "gpt-3.5-turbo", api_key: Optional[str] = None) -> Dict[str, str]:
+  """入力プロンプトのリストに対してGPTモデルを使用して応答を生成します。"""
+  prompt_to_response = {}
+  
+  for i, inp in enumerate(inputs):
+    print(f"プロンプト {i+1}/{len(inputs)} を処理中...")
+    try:
+      response = generate_gpt_response(inp.prompt, model, api_key)
+      prompt_to_response[inp.prompt] = response
+    except Exception as e:
+      print(f"プロンプト {i+1} の処理中にエラーが発生しました: {e}")
+      prompt_to_response[inp.prompt] = ""
+  
+  return prompt_to_response
+
+
+def generate_responses(inputs: Sequence[InputExample], provider: str = "openai", model: str = None, api_key: Optional[str] = None) -> Dict[str, str]:
+  """入力プロンプトのリストに対して指定されたプロバイダーのモデルを使用して応答を生成します。"""
+  prompt_to_response = {}
+  
+  for i, inp in enumerate(inputs):
+    print(f"プロンプト {i+1}/{len(inputs)} を処理中...")
+    try:
+      response = generate_response(inp.prompt, provider, model, api_key)
+      prompt_to_response[inp.prompt] = response
+    except Exception as e:
+      print(f"プロンプト {i+1} の処理中にエラーが発生しました: {e}")
+      prompt_to_response[inp.prompt] = ""
+  
+  return prompt_to_response
 
 
 def print_report(outputs):
@@ -207,8 +385,8 @@ def print_report(outputs):
       if followed_or_not:
         tier1_correct[instruction_id] += 1
 
-  print(f"prompt-level: {prompt_correct / prompt_total}")
-  print(f"instruction-level: {instruction_correct / instruction_total}")
+  print(f"プロンプトレベル精度: {prompt_correct / prompt_total}")
+  print(f"指示レベル精度: {instruction_correct / instruction_total}")
   print()
   for instruction_id in sorted(tier0_total.keys()):
     accuracy = tier0_correct[instruction_id] / tier0_total[instruction_id]

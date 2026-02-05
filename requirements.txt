@@ -2,3 +2,6 @@ absl-py
 langdetect
 nltk
 immutabledict
+openai
+anthropic
+google-generativeai

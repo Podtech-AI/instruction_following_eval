@@ -13,7 +13,7 @@
 # 詳細については、ライセンスを参照してください。
 
 """すべての指示のレジストリ。"""
-from instruction_following_eval import instructions
+import instructions
 
 _KEYWORD = "keywords:"
 
@@ -35,69 +35,57 @@ _CHANGE_CASES = "change_case:"
 
 _PUNCTUATION = "punctuation:"
 
+# 日本語適応版：10~20個の指示に絞り込み
 INSTRUCTION_DICT = {
+    # キーワード関連（3つ）
     _KEYWORD + "existence": instructions.KeywordChecker,
     _KEYWORD + "frequency": instructions.KeywordFrequencyChecker,
-    # TODO(jeffreyzhou): 選択するための適切な文のセットを作成する
-    # _KEYWORD + "key_sentences": instructions.KeySentenceChecker,
     _KEYWORD + "forbidden_words": instructions.ForbiddenWords,
-    _KEYWORD + "letter_frequency": instructions.LetterFrequencyChecker,
-    _LANGUAGE + "response_language": instructions.ResponseLanguageChecker,
+    
+    # 長さ制約（4つ）
     _LENGTH + "number_sentences": instructions.NumberOfSentences,
     _LENGTH + "number_paragraphs": instructions.ParagraphChecker,
     _LENGTH + "number_words": instructions.NumberOfWords,
     _LENGTH + "nth_paragraph_first_word": instructions.ParagraphFirstWordCheck,
+    
+    # 内容（2つ）
     _CONTENT + "number_placeholders": instructions.PlaceholderChecker,
     _CONTENT + "postscript": instructions.PostscriptChecker,
+    
+    # フォーマット（5つ）
     _FORMAT + "number_bullet_lists": instructions.BulletListChecker,
-    # TODO(jeffreyzhou): 段落を事前作成するか、プロンプトを使用して置き換える
-    # _CONTENT + "rephrase_paragraph": instructions.RephraseParagraph,
-    _FORMAT + "constrained_response": instructions.ConstrainedResponseChecker,
-    _FORMAT + "number_highlighted_sections": (
-        instructions.HighlightSectionChecker),
+    _FORMAT + "number_highlighted_sections": instructions.HighlightSectionChecker,
     _FORMAT + "multiple_sections": instructions.SectionChecker,
-    # TODO(tianjianlu): メッセージの前処理で言い換えを再有効化する。
-    # _FORMAT + "rephrase": instructions.RephraseChecker,
     _FORMAT + "json_format": instructions.JsonFormat,
     _FORMAT + "title": instructions.TitleChecker,
-    # TODO(tianjianlu): 特定のプロンプトで再有効化する。
-    # _MULTITURN + "constrained_start": instructions.ConstrainedStartChecker,
-    _COMBINATION + "two_responses": instructions.TwoResponsesChecker,
-    _COMBINATION + "repeat_prompt": instructions.RepeatPromptThenAnswer,
+    
+    # 開始・終了（2つ）
     _STARTEND + "end_checker": instructions.EndChecker,
-    _CHANGE_CASES
-    + "capital_word_frequency": instructions.CapitalWordFrequencyChecker,
-    _CHANGE_CASES
-    + "english_capital": instructions.CapitalLettersEnglishChecker,
-    _CHANGE_CASES
-    + "english_lowercase": instructions.LowercaseLettersEnglishChecker,
-    _PUNCTUATION + "no_comma": instructions.CommaChecker,
     _STARTEND + "quotation": instructions.QuotationChecker,
+    
+    # 日本語特有（3つ）
+    _CHANGE_CASES + "japanese_hiragana": instructions.JapaneseHiraganaChecker,
+    _CHANGE_CASES + "japanese_casual": instructions.JapaneseCasualChecker,
+    _CHANGE_CASES + "katakana_word_frequency": instructions.KatakanaWordFrequencyChecker,
+    
+    # 句読点
+    _PUNCTUATION + "no_comma": instructions.CommaChecker,
+    
+    # 言語
+    "language:response_language": instructions.ResponseLanguageChecker,
 }
 
+# 日本語適応版の競合関係
 INSTRUCTION_CONFLICTS = {
+    # キーワード関連
     _KEYWORD + "existence": {_KEYWORD + "existence"},
     _KEYWORD + "frequency": {_KEYWORD + "frequency"},
-    # TODO(jeffreyzhou): 選択するための適切な文のセットを作成する
-    # _KEYWORD + "key_sentences": instructions.KeySentenceChecker,
     _KEYWORD + "forbidden_words": {_KEYWORD + "forbidden_words"},
-    _KEYWORD + "letter_frequency": {_KEYWORD + "letter_frequency"},
-    _LANGUAGE
-    + "response_language": {
-        _LANGUAGE + "response_language",
-        _FORMAT + "multiple_sections",
-        _KEYWORD + "existence",
-        _KEYWORD + "frequency",
-        _KEYWORD + "forbidden_words",
-        _STARTEND + "end_checker",
-        _CHANGE_CASES + "english_capital",
-        _CHANGE_CASES + "english_lowercase",
-    },
+    
+    # 長さ制約
     _LENGTH + "number_sentences": {_LENGTH + "number_sentences"},
     _LENGTH + "number_paragraphs": {
         _LENGTH + "number_paragraphs",
-        _LENGTH + "nth_paragraph_first_word",
-        _LENGTH + "number_sentences",
         _LENGTH + "nth_paragraph_first_word",
     },
     _LENGTH + "number_words": {_LENGTH + "number_words"},
@@ -105,55 +93,47 @@ INSTRUCTION_CONFLICTS = {
         _LENGTH + "nth_paragraph_first_word",
         _LENGTH + "number_paragraphs",
     },
+    
+    # 内容
     _CONTENT + "number_placeholders": {_CONTENT + "number_placeholders"},
     _CONTENT + "postscript": {_CONTENT + "postscript"},
+    
+    # フォーマット
     _FORMAT + "number_bullet_lists": {_FORMAT + "number_bullet_lists"},
-    # TODO(jeffreyzhou): 段落を事前作成するか、プロンプトを使用して置き換える
-    # _CONTENT + "rephrase_paragraph": instructions.RephraseParagraph,
-    _FORMAT + "constrained_response": set(INSTRUCTION_DICT.keys()),
-    _FORMAT
-    + "number_highlighted_sections": {_FORMAT + "number_highlighted_sections"},
-    _FORMAT
-    + "multiple_sections": {
+    _FORMAT + "number_highlighted_sections": {_FORMAT + "number_highlighted_sections"},
+    _FORMAT + "multiple_sections": {
         _FORMAT + "multiple_sections",
-        _LANGUAGE + "response_language",
         _FORMAT + "number_highlighted_sections",
     },
-    # TODO(tianjianlu): メッセージの前処理で言い換えを再有効化する。
-    # _FORMAT + "rephrase": instructions.RephraseChecker,
-    _FORMAT
-    + "json_format": set(INSTRUCTION_DICT.keys()).difference(
+    _FORMAT + "json_format": set(INSTRUCTION_DICT.keys()).difference(
         {_KEYWORD + "forbidden_words", _KEYWORD + "existence"}
     ),
     _FORMAT + "title": {_FORMAT + "title"},
-    # TODO(tianjianlu): 特定のプロンプトで再有効化する。
-    # _MULTITURN + "constrained_start": instructions.ConstrainedStartChecker,
-    _COMBINATION
-    + "two_responses": set(INSTRUCTION_DICT.keys()).difference({
-        _KEYWORD + "forbidden_words",
-        _KEYWORD + "existence",
-        _LANGUAGE + "response_language",
-        _FORMAT + "title",
-        _PUNCTUATION + "no_comma"
-    }),
-    _COMBINATION + "repeat_prompt": set(INSTRUCTION_DICT.keys()).difference({
-        _KEYWORD + "existence",
-        _FORMAT + "title",
-        _PUNCTUATION + "no_comma"
-    }),
+    
+    # 開始・終了
     _STARTEND + "end_checker": {_STARTEND + "end_checker"},
-    _CHANGE_CASES + "capital_word_frequency": {
-        _CHANGE_CASES + "capital_word_frequency",
-        _CHANGE_CASES + "english_lowercase",
-        _CHANGE_CASES + "english_capital",
-    },
-    _CHANGE_CASES + "english_capital": {_CHANGE_CASES + "english_capital"},
-    _CHANGE_CASES + "english_lowercase": {
-        _CHANGE_CASES + "english_lowercase",
-        _CHANGE_CASES + "english_capital",
-    },
-    _PUNCTUATION + "no_comma": {_PUNCTUATION + "no_comma"},
     _STARTEND + "quotation": {_STARTEND + "quotation", _FORMAT + "title"},
+    
+    # 日本語特有
+    _CHANGE_CASES + "japanese_hiragana": {
+        _CHANGE_CASES + "japanese_hiragana",
+        _CHANGE_CASES + "japanese_casual",
+        _CHANGE_CASES + "katakana_word_frequency",
+    },
+    _CHANGE_CASES + "japanese_casual": {
+        _CHANGE_CASES + "japanese_casual",
+        _CHANGE_CASES + "japanese_hiragana",
+    },
+    _CHANGE_CASES + "katakana_word_frequency": {
+        _CHANGE_CASES + "katakana_word_frequency",
+        _CHANGE_CASES + "japanese_hiragana",
+    },
+    
+    # 句読点
+    _PUNCTUATION + "no_comma": {_PUNCTUATION + "no_comma"},
+    
+    # 言語
+    "language:response_language": {"language:response_language"},
 }
 
 

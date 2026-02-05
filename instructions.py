@@ -23,7 +23,7 @@ from typing import Dict, Optional, Sequence, Union
 from absl import logging
 import langdetect
 
-from instruction_following_eval import instructions_util
+import instructions_util
 
 
 _InstructionArgsDtype = Optional[Dict[str, Union[int, str, Sequence[str]]]]
@@ -196,9 +196,10 @@ class NumberOfSentences(Instruction):
       self._comparison_relation = relation
 
     self._description_pattern = (
-        "Your response should contain {relation} {num_sentences} sentences.")
+        "応答は{num_sentences}文{relation}である必要があります。")
+    relation_jp = "より少ない" if self._comparison_relation == "less than" else "以上"
     return self._description_pattern.format(
-        relation=self._comparison_relation,
+        relation=relation_jp,
         num_sentences=self._num_sentences_threshold)
 
   def get_instruction_args(self):
@@ -247,8 +248,7 @@ class PlaceholderChecker(Instruction):
     if self._num_placeholders is None or self._num_placeholders < 0:
       self._num_placeholders = random.randint(1, _NUM_PLACEHOLDERS)
     self._description_pattern = (
-        "The response must contain at least {num_placeholders} placeholders " +
-        "represented by square brackets, such as [address].")
+        "応答には[住所]のような角括弧で表された、少なくとも{num_placeholders}個のプレースホルダーが含まれている必要があります。")
     return self._description_pattern.format(
         num_placeholders=self._num_placeholders)
 
@@ -292,10 +292,10 @@ class BulletListChecker(Instruction):
     if self._num_bullets is None or self._num_bullets < 0:
       self._num_bullets = random.randint(1, _NUM_BULLETS)
     self._description_pattern = (
-        "Your answer must contain exactly {num_bullets} bullet points. " +
-        "Use the markdown bullet points such as:\n" +
-        "* This is point 1. \n" +
-        "* This is point 2")
+        "回答には正確に{num_bullets}個の箇条書きポイントが含まれている必要があります。" +
+        "以下のようなマークダウン箇条書きを使用してください：\n" +
+        "* これがポイント1です。\n" +
+        "* これがポイント2です。")
     return self._description_pattern.format(
         num_bullets=self._num_bullets)
 
@@ -714,7 +714,7 @@ class KeywordChecker(Instruction):
       self._keywords = keywords
     self._keywords = sorted(self._keywords)
 
-    self._description_pattern = ("Include keywords {keywords} in the response.")
+    self._description_pattern = ("回答にキーワード{keywords}を含めてください。")
 
     return self._description_pattern.format(keywords=self._keywords)
 
@@ -1546,3 +1546,136 @@ class QuotationChecker(Instruction):
     """応答が二重引用符で囲まれているかをチェックします。"""
     value = value.strip()
     return len(value) > 1 and value[0] == '"' and value[-1] == '"'
+
+
+class JapaneseHiraganaChecker(Instruction):
+  """応答がすべてひらがなで書かれているかをチェックします。"""
+
+  def build_description(self):
+    """指示の説明を構築します。"""
+    self._description_pattern = (
+        "回答はすべてひらがなで書いてください。漢字やカタカナは使用できません。"
+    )
+    return self._description_pattern
+
+  def get_instruction_args(self):
+    return None
+
+  def get_instruction_args_keys(self):
+    """`build_description`の引数キーを返します。"""
+    return []
+
+  def check_following(self, value):
+    """応答がすべてひらがなで書かれているかをチェックします。"""
+    assert isinstance(value, str)
+    
+    # 記号、数字、英字、空白を除去
+    import re
+    japanese_text = re.sub(r'[^\u3041-\u3096\u30FC\u3000\s\n。、！？]', '', value)
+    
+    # 残った文字がすべてひらがなかどうかチェック
+    for char in japanese_text:
+      if char not in ' \n\t\u3000。、！？' and not ('\u3041' <= char <= '\u3096'):
+        return False
+    return True
+
+
+class JapaneseCasualChecker(Instruction):
+  """応答が敬語を使わずカジュアルな日本語で書かれているかをチェックします。"""
+
+  def build_description(self):
+    """指示の説明を構築します。"""
+    self._description_pattern = (
+        "回答は敬語を使わず、カジュアルな日本語で書いてください。"
+    )
+    return self._description_pattern
+
+  def get_instruction_args(self):
+    return None
+
+  def get_instruction_args_keys(self):
+    """`build_description`の引数キーを返します。"""
+    return []
+
+  def check_following(self, value):
+    """応答が敬語を使わずカジュアルな日本語で書かれているかをチェックします。"""
+    assert isinstance(value, str)
+    
+    # 敬語の典型的なパターンをチェック
+    keigo_patterns = [
+        r'です(?![^\u3040-\u309F])',  # 「です」
+        r'ます(?![^\u3040-\u309F])',  # 「ます」
+        r'である(?![^\u3040-\u309F])', # 「である」
+        r'ございます',                # 「ございます」
+        r'いらっしゃ',               # 「いらっしゃる」系
+        r'お.*になる',               # 「お〜になる」
+        r'させていただ',             # 「させていただく」系
+    ]
+    
+    import re
+    for pattern in keigo_patterns:
+      if re.search(pattern, value):
+        return False
+    return True
+
+
+class KatakanaWordFrequencyChecker(Instruction):
+  """すべてカタカナの単語の頻度をチェックします。"""
+
+  def build_description(
+      self,
+      capital_frequency = None,
+      capital_relation = None,
+  ):
+    """指示の説明を構築します。
+
+    Args:
+      capital_frequency: すべてカタカナであるべき単語の数を表す整数。
+      capital_relation: 頻度に関して'at least'または'less than'のいずれかの文字列。
+
+    Returns:
+      指示の説明を表す文字列。
+    """
+    self._frequency = capital_frequency
+    if self._frequency is None:
+      self._frequency = random.randint(1, 10)
+
+    self._comparison_relation = capital_relation
+    if capital_relation is None:
+      self._comparison_relation = random.choice(_COMPARISON_RELATION)
+    elif capital_relation not in _COMPARISON_RELATION:
+      raise ValueError(
+          "The supported relation for comparison must be in "
+          f"{_COMPARISON_RELATION}, but {capital_relation} is given."
+      )
+
+    self._description_pattern = (
+        "回答では、すべてカタカナの単語が{relation} {frequency}回現れる必要があります。"
+    )
+
+    return self._description_pattern.format(
+        frequency=self._frequency, relation=self._comparison_relation
+    )
+
+  def get_instruction_args(self):
+    """`build_description`のキーワード引数を返します。"""
+    return {
+        "capital_frequency": self._frequency,
+        "capital_relation": self._comparison_relation,
+    }
+
+  def get_instruction_args_keys(self):
+    """`build_description`の引数キーを返します。"""
+    return ["capital_frequency", "capital_relation"]
+
+  def check_following(self, value):
+    """すべてカタカナの単語の頻度をチェックします。"""
+    import re
+    # カタカナのみで構成された単語を抽出
+    katakana_words = re.findall(r'[\u30A1-\u30F6]+', value)
+    katakana_count = len(katakana_words)
+
+    if self._comparison_relation == _COMPARISON_RELATION[0]:  # less than
+      return katakana_count < self._frequency
+    else:  # at least
+      return katakana_count >= self._frequency
